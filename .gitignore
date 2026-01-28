@@ -1,0 +1,13 @@
+# === 必须忽略的敏感文件 ===
+config.json
+.env
+
+# === 忽略系统生成文件 ===
+__pycache__/
+*.pyc
+.DS_Store
+
+# === 忽略虚拟环境 (如果有) ===
+.venv/
+venv/
+.idea/
