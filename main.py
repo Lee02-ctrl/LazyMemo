@@ -6,6 +6,7 @@ import subprocess
 import time
 import schedule
 import datetime
+import sys
 
 from PyQt6.QtWidgets import (QApplication, QWidget, QLineEdit, QVBoxLayout,
                              QLabel, QPushButton, QMessageBox, QInputDialog,
@@ -19,7 +20,13 @@ from mac_reminders import (create_reminder, append_to_note, search_reminders,
                            update_reminder_by_id, get_todays_tasks, send_system_notification)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+# === 修改配置路径逻辑 ===
+# 如果是打包后的 APP，配置文件存放在用户根目录下，避免权限问题
+if getattr(sys, 'frozen', False):
+    CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".lazymemo_config.json")
+else:
+    # 开发模式下，还是存在项目文件夹里
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 
 # --- 辅助函数：读取配置 ---
@@ -401,7 +408,7 @@ class LazyMemoApp(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("LazyMemo Ready... (Option+Space)")
+        self.input_field.setPlaceholderText("LazyMemo Ready... ")
         self.input_field.returnPressed.connect(self.handle_input)
         layout.addWidget(self.input_field)
         self.setLayout(layout)
@@ -422,12 +429,30 @@ class LazyMemoApp(QWidget):
             self.open_settings()
 
     def start_keyboard_listener(self):
-        hotkey = '<alt>+<space>'
+        # 记录上一次松开 Option 的时间
+        self.last_alt_time = 0
 
-        def on_activate():
-            self.show_signal.emit()
+        def on_press(key):
+            # 关键逻辑：如果按下了除 Option 以外的任何键，说明你在正常打字或使用组合键
+            # 此时必须重置计时器，防止误触
+            if key not in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
+                self.last_alt_time = 0
 
-        self.listener = keyboard.GlobalHotKeys({hotkey: on_activate})
+        def on_release(key):
+            # 只有在松开 Option 键的瞬间进行判断
+            if key in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
+                import time  # 确保导入了 time
+                current_time = time.time()
+
+                # 如果距离上次松开 Option 小于 0.4 秒，视为双击
+                if current_time - self.last_alt_time < 0.4:
+                    self.show_signal.emit()  # 唤醒！
+                    self.last_alt_time = 0  # 重置，防止三连击触发两次
+                else:
+                    self.last_alt_time = current_time
+
+        # 启动监听器 (注意：这里使用的是 Listener 而不是 GlobalHotKeys)
+        self.listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self.listener.start()
 
     def show_window(self):

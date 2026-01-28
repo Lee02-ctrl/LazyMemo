@@ -103,7 +103,7 @@ LazyMemo 支持通过 GUI 设置面板修改配置，配置会自动保存到 co
 
 ### **唤醒**
 
-按下全局快捷键 **Option \+ Space** (Alt \+ Space) 呼出输入框。
+按下全局快捷键 **Option \+ Option** (双击ALT) 呼出输入框。
 
 ### **场景演示**
 
