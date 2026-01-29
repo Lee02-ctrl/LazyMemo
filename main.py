@@ -6,11 +6,12 @@ import subprocess
 import time
 import schedule
 import datetime
-import sys
 
 from PyQt6.QtWidgets import (QApplication, QWidget, QLineEdit, QVBoxLayout,
                              QLabel, QPushButton, QMessageBox, QInputDialog,
-                             QCheckBox, QTimeEdit, QGroupBox, QFormLayout, QGridLayout, QScrollArea)
+                             QCheckBox, QTimeEdit, QGroupBox, QFormLayout,
+                             QGridLayout, QScrollArea, QSystemTrayIcon, QMenu)
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QTime
 
 from pynput import keyboard
@@ -20,13 +21,17 @@ from mac_reminders import (create_reminder, append_to_note, search_reminders,
                            update_reminder_by_id, get_todays_tasks, send_system_notification)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# === 修改配置路径逻辑 ===
-# 如果是打包后的 APP，配置文件存放在用户根目录下，避免权限问题
+
+# === 路径配置逻辑 ===
+# 如果是打包后的 APP，读取用户目录下的隐藏配置文件
 if getattr(sys, 'frozen', False):
     CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".lazymemo_config.json")
+    # PyInstaller 解压资源的临时目录 (用于找 tray_icon.png)
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 else:
-    # 开发模式下，还是存在项目文件夹里
+    # 开发模式下
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    BUNDLE_DIR = BASE_DIR
 
 
 # --- 辅助函数：读取配置 ---
@@ -39,7 +44,7 @@ def get_config():
             }
         }
     try:
-        with open(CONFIG_PATH, "r") as f:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
             if "time_mapping" not in config:
                 config["time_mapping"] = {
@@ -246,7 +251,7 @@ class SettingsWindow(QWidget):
         }
 
         try:
-            with open(CONFIG_PATH, "w") as f:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
             QMessageBox.information(self, "已保存", "配置保存成功！")
             self.close()
@@ -375,13 +380,11 @@ class SchedulerThread(threading.Thread):
     def push_morning_briefing(self):
         print("Checking tasks for notification...")
         message = get_todays_tasks()
-        # 只要没报错，哪怕是空消息（无事发生）也发送
         if "失败" not in message:
             send_system_notification("LazyMemo 早报", message)
 
     def push_daily_summary(self):
         message = get_todays_tasks()
-        # 修正：去掉 "🔥" in message，改为和早报一样，只要不失败就发送
         if "失败" not in message:
             send_system_notification("LazyMemo 晚间提醒", message)
 
@@ -392,6 +395,7 @@ class LazyMemoApp(QWidget):
 
     def __init__(self):
         super().__init__()
+        # 设置窗口属性：无边框、置顶、工具窗口模式
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -408,7 +412,7 @@ class LazyMemoApp(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("LazyMemo Ready... ")
+        self.input_field.setPlaceholderText("LazyMemo Ready... (Double Tap Option)")
         self.input_field.returnPressed.connect(self.handle_input)
         layout.addWidget(self.input_field)
         self.setLayout(layout)
@@ -417,50 +421,99 @@ class LazyMemoApp(QWidget):
 
         self.settings_window = None
         self.show_signal.connect(self.show_window)
+
+        # 初始化菜单栏托盘图标
+        self.init_tray_icon()
+
+        # 启动键盘监听
         self.start_keyboard_listener()
+
         QTimer.singleShot(500, self.check_first_run)
 
         self.scheduler = SchedulerThread()
         self.scheduler.start()
+
+    def init_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+
+        # 尝试查找 tray_icon.png
+        # 优先去 BUNDLE_DIR (打包后的资源目录) 查找
+        icon_path = os.path.join(BUNDLE_DIR, "tray_icon.png")
+
+        if os.path.exists(icon_path):
+            self.tray_icon.setIcon(QIcon(icon_path))
+        else:
+            print(f"Warning: Icon not found at {icon_path}")
+            # 如果找不到图片，这里其实应该给个默认行为，或者不显示图标
+            # 但 QSystemTrayIcon 如果没有 Icon 是不会显示的
+            pass
+
+        # 创建右键菜单
+        tray_menu = QMenu()
+
+        # 显示/隐藏 动作
+        show_action = QAction("显示/隐藏 LazyMemo", self)
+        show_action.triggered.connect(self.toggle_visibility)
+        tray_menu.addAction(show_action)
+
+        tray_menu.addSeparator()
+
+        # 退出 动作
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(QApplication.instance().quit)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+
+        # 单击托盘图标也可以切换显示
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+
+        self.tray_icon.show()
+
+    def on_tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.toggle_visibility()
+
+    def toggle_visibility(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show_window()
+
+    def show_window(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.input_field.setFocus()
+        self.input_field.clear()
 
     def check_first_run(self):
         config = get_config()
         if config.get("use_ai", True) and not config.get("api_key"):
             self.open_settings()
 
+    # === 双击 Option 监听逻辑 ===
     def start_keyboard_listener(self):
-        # 记录上一次松开 Option 的时间
         self.last_alt_time = 0
 
         def on_press(key):
-            # 关键逻辑：如果按下了除 Option 以外的任何键，说明你在正常打字或使用组合键
-            # 此时必须重置计时器，防止误触
+            # 如果按下了除 Option 以外的任何键，重置计时器
             if key not in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
                 self.last_alt_time = 0
 
         def on_release(key):
             # 只有在松开 Option 键的瞬间进行判断
             if key in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
-                import time  # 确保导入了 time
                 current_time = time.time()
-
                 # 如果距离上次松开 Option 小于 0.4 秒，视为双击
                 if current_time - self.last_alt_time < 0.4:
-                    self.show_signal.emit()  # 唤醒！
-                    self.last_alt_time = 0  # 重置，防止三连击触发两次
+                    self.show_signal.emit()  # 唤醒
+                    self.last_alt_time = 0  # 重置，防止三连击
                 else:
                     self.last_alt_time = current_time
 
-        # 启动监听器 (注意：这里使用的是 Listener 而不是 GlobalHotKeys)
         self.listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self.listener.start()
-
-    def show_window(self):
-        self.show();
-        self.raise_();
-        self.activateWindow();
-        self.input_field.setFocus();
-        self.input_field.clear()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape: self.hide()
@@ -518,6 +571,7 @@ class LazyMemoApp(QWidget):
     def open_settings(self):
         if not self.settings_window: self.settings_window = SettingsWindow()
         self.settings_window.show()
+        # 居中显示设置窗口
         s = QApplication.primaryScreen().geometry()
         self.settings_window.move((s.width() - self.settings_window.width()) // 2,
                                   (s.height() - self.settings_window.height()) // 2)
@@ -527,7 +581,10 @@ class LazyMemoApp(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # 关键设置：关闭最后一个窗口（输入框）时，不要退出程序
+    # 因为我们还有系统托盘在运行
     app.setQuitOnLastWindowClosed(False)
+
     window = LazyMemoApp()
     print("LazyMemo Running...")
     sys.exit(app.exec())
