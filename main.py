@@ -2,7 +2,6 @@ import sys
 import json
 import os
 import threading
-import subprocess
 import time
 import schedule
 import datetime
@@ -10,93 +9,95 @@ import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QLineEdit, QVBoxLayout,
                              QLabel, QPushButton, QMessageBox, QInputDialog,
                              QCheckBox, QTimeEdit, QGroupBox, QFormLayout,
-                             QGridLayout, QScrollArea, QSystemTrayIcon, QMenu)
+                             QGridLayout, QScrollArea, QSystemTrayIcon, QMenu,
+                             QHBoxLayout, QAbstractSpinBox)  # 引入 QAbstractSpinBox 以便样式控制
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QTime
 
 from pynput import keyboard
 
+# 确保导入了发送通知的函数
 from ai_engine import parse_user_input
 from mac_reminders import (create_reminder, append_to_note, search_reminders,
-                           update_reminder_by_id, get_todays_tasks, send_system_notification)
+                           update_reminder_by_id, get_todays_tasks, send_email_notification)
+
+if getattr(sys, 'frozen', False):
+    log_path = os.path.join(os.path.expanduser("~"), "lazymemo_debug.log")
+    sys.stdout = open(log_path, "a", buffering=1, encoding='utf-8')
+    sys.stderr = open(log_path, "a", buffering=1, encoding='utf-8')
+    print(f"\n=== App Started at {datetime.datetime.now()} ===")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# === 路径配置逻辑 ===
-# 如果是打包后的 APP，读取用户目录下的隐藏配置文件
 if getattr(sys, 'frozen', False):
     CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".lazymemo_config.json")
-    # PyInstaller 解压资源的临时目录 (用于找 tray_icon.png)
     BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 else:
-    # 开发模式下
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
     BUNDLE_DIR = BASE_DIR
 
 
-# --- 辅助函数：读取配置 ---
 def get_config():
     if not os.path.exists(CONFIG_PATH):
-        return {
-            "time_mapping": {
-                "早上": "09:00", "中午": "12:00", "下午": "15:00",
-                "晚上": "18:00", "夜里": "22:00", "凌晨": "00:00"
-            }
-        }
+        return {}
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            if "time_mapping" not in config:
-                config["time_mapping"] = {
-                    "早上": "09:00", "中午": "12:00", "下午": "15:00",
-                    "晚上": "18:00", "夜里": "22:00", "凌晨": "00:00"
-                }
-            return config
+            return json.load(f)
     except:
         return {}
 
 
-# --- 设置窗口 ---
+# --- 设置窗口 (UI 最终美化版) ---
 class SettingsWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("偏好设置")
-        self.resize(450, 550)
+        self.resize(480, 680)
 
+        # 🎨 核心改动：QTimeEdit/QAbstractSpinBox 样式优化
         self.setStyleSheet("""
             QWidget {
-                background-color: #2E2E2E; color: #DDDDDD;
+                background-color: #2E2E2E; color: #E0E0E0;
                 font-family: 'SF Pro Text', 'PingFang SC', sans-serif; font-size: 13px;
             }
             QGroupBox {
-                border: 1px solid #3E3E3E; border-radius: 8px;
-                margin-top: 22px; padding-top: 10px; background-color: #363636;
+                border: 1px solid #3E3E3E; border-radius: 10px;
+                margin-top: 24px; padding-top: 14px; background-color: #363636;
             }
             QGroupBox::title {
                 subcontrol-origin: margin; subcontrol-position: top left;
-                padding: 0 5px; left: 10px; color: #8E8E93; font-weight: bold; font-size: 12px;
+                padding: 0 8px; left: 12px; color: #8E8E93; font-weight: bold; font-size: 12px;
             }
-            QLineEdit, QTimeEdit {
-                background-color: rgba(0, 0, 0, 0.2); border: 1px solid transparent;
-                border-radius: 6px; padding: 6px 10px; color: white; font-size: 14px;
+            /* 通用输入框样式 */
+            QLineEdit, QTimeEdit, QAbstractSpinBox {
+                background-color: #262626; 
+                border: 1px solid #454545;
+                border-radius: 6px; 
+                padding: 6px 10px; 
+                color: white; 
+                font-size: 13px;
                 selection-background-color: #0A84FF; 
             }
-            QLineEdit:focus, QTimeEdit:focus {
-                border: 1px solid #0A84FF; background-color: rgba(0, 0, 0, 0.4);
+            /* 获得焦点时的蓝色高亮 (macOS 风格) */
+            QLineEdit:focus, QTimeEdit:focus, QAbstractSpinBox:focus {
+                border: 1px solid #0A84FF; 
+                background-color: #1F1F1F;
             }
-            QTimeEdit::up-button, QTimeEdit::down-button { width: 0px; border: none; }
+            /* 🔥 关键改动：隐藏 QTimeEdit 右侧那个尖尖的按钮 */
+            QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+                width: 0px; 
+                height: 0px;
+                border: none;
+                background: transparent;
+            }
+            QLabel { color: #CCCCCC; }
+            QLabel#HelpText { color: #888888; font-size: 11px; margin-top: 2px; margin-left: 2px;} 
             QPushButton {
                 background-color: #007AFF; border-radius: 6px; color: white; 
-                font-weight: 600; padding: 8px 16px; font-size: 13px;
+                font-weight: 500; padding: 8px 16px; font-size: 13px;
             }
-            QPushButton:pressed { background-color: #0062CC; }
-            QScrollBar:vertical {
-                border: none; background: #2E2E2E; width: 8px;
-            }
-            QScrollBar::handle:vertical {
-                background: #555; min-height: 20px; border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QPushButton:hover { background-color: #0071EB; }
+            QPushButton:pressed { background-color: #005BB5; }
         """)
 
         scroll_area = QScrollArea()
@@ -105,18 +106,18 @@ class SettingsWindow(QWidget):
 
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(24)
 
         title_label = QLabel("偏好设置")
-        title_label.setStyleSheet("font-size: 22px; font-weight: 700; color: white; margin-bottom: 5px;")
+        title_label.setStyleSheet("font-size: 20px; font-weight: 600; color: white; margin-bottom: 5px;")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
         # === 1. 智能引擎 ===
         mode_group = QGroupBox("智能引擎")
         mode_layout = QVBoxLayout()
-        mode_layout.setContentsMargins(15, 25, 15, 15)
+        mode_layout.setContentsMargins(16, 24, 16, 16)
         mode_layout.setSpacing(10)
 
         self.ai_check = QCheckBox("启用 AI 语义分析")
@@ -124,7 +125,7 @@ class SettingsWindow(QWidget):
         self.ai_check.toggled.connect(self.toggle_ai_input)
 
         hint = QLabel("关闭后将进入「离线模式」，仅通过关键词匹配时间和意图。")
-        hint.setStyleSheet("color: #8E8E93; font-size: 11px;")
+        hint.setObjectName("HelpText")
 
         self.api_input = QLineEdit()
         self.api_input.setPlaceholderText("在此粘贴 MiniMax API Key")
@@ -136,33 +137,88 @@ class SettingsWindow(QWidget):
         mode_group.setLayout(mode_layout)
         layout.addWidget(mode_group)
 
-        # === 2. 日报推送 ===
-        report_group = QGroupBox("日报时刻")
-        report_layout = QFormLayout()
-        report_layout.setContentsMargins(15, 25, 15, 15)
-        report_layout.setVerticalSpacing(15)
+        # === 2. 邮件通知 ===
+        email_group = QGroupBox("邮件推送")
+        email_main_layout = QVBoxLayout()
+        email_main_layout.setContentsMargins(16, 24, 16, 16)
+        email_main_layout.setSpacing(12)
 
-        label_style = "color: #DDDDDD; font-weight: 500;"
+        # 第一行：服务器 和 端口
+        server_layout = QHBoxLayout()
+        server_layout.setSpacing(10)
+
+        self.smtp_server = QLineEdit("smtp.163.com")
+        self.smtp_server.setPlaceholderText("SMTP 服务器")
+
+        self.smtp_port = QLineEdit("465")
+        self.smtp_port.setPlaceholderText("端口")
+        self.smtp_port.setFixedWidth(80)
+
+        server_layout.addWidget(QLabel("服务器:"))
+        server_layout.addWidget(self.smtp_server)
+        server_layout.addWidget(QLabel("端口:"))
+        server_layout.addWidget(self.smtp_port)
+
+        email_main_layout.addLayout(server_layout)
+
+        # 第二行：账号信息
+        self.sender_email = QLineEdit()
+        self.sender_email.setPlaceholderText("你的邮箱 (例如: user@163.com)")
+
+        email_main_layout.addWidget(QLabel("发件邮箱:"))
+        email_main_layout.addWidget(self.sender_email)
+
+        # 第三行：授权码
+        self.email_pwd = QLineEdit()
+        self.email_pwd.setEchoMode(QLineEdit.EchoMode.Password)
+        self.email_pwd.setPlaceholderText("在此输入 163 邮箱授权码")
+
+        pwd_help = QLabel("⚠️ 注意：必须填写邮箱设置中生成的「授权码」，而非登录密码。")
+        pwd_help.setObjectName("HelpText")
+
+        email_main_layout.addWidget(QLabel("授权码:"))
+        email_main_layout.addWidget(self.email_pwd)
+        email_main_layout.addWidget(pwd_help)
+
+        # 第四行：收件人
+        self.receiver_email = QLineEdit()
+        self.receiver_email.setPlaceholderText("选填，留空则默认发给自己")
+
+        email_main_layout.addWidget(QLabel("收件人 (可选):"))
+        email_main_layout.addWidget(self.receiver_email)
+
+        email_group.setLayout(email_main_layout)
+        layout.addWidget(email_group)
+
+        # === 3. 日报时刻 ===
+        report_group = QGroupBox("日报时刻")
+        report_layout = QGridLayout()
+        report_layout.setContentsMargins(16, 24, 16, 16)
+        report_layout.setVerticalSpacing(15)
+        report_layout.setHorizontalSpacing(15)
+
         self.morning_edit = QTimeEdit()
         self.morning_edit.setDisplayFormat("HH:mm")
+        # 移除上下按钮后，设置对齐方式居中会更好看
+        self.morning_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self.evening_edit = QTimeEdit()
         self.evening_edit.setDisplayFormat("HH:mm")
+        self.evening_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        l1 = QLabel("🌞 早报推送")
-        l1.setStyleSheet(label_style)
-        report_layout.addRow(l1, self.morning_edit)
-        l2 = QLabel("🌙 晚报推送")
-        l2.setStyleSheet(label_style)
-        report_layout.addRow(l2, self.evening_edit)
+        report_layout.addWidget(QLabel("🌞 早报推送"), 0, 0)
+        report_layout.addWidget(self.morning_edit, 0, 1)
+        report_layout.addWidget(QLabel("🌙 晚报推送"), 1, 0)
+        report_layout.addWidget(self.evening_edit, 1, 1)
 
         report_group.setLayout(report_layout)
         layout.addWidget(report_group)
 
-        # === 3. 语义时间定义 ===
-        time_def_group = QGroupBox("语义时间定义 (全局)")
+        # === 4. 语义时间定义 ===
+        time_def_group = QGroupBox("语义时间定义")
         self.time_def_layout = QGridLayout()
-        self.time_def_layout.setContentsMargins(15, 25, 15, 15)
-        self.time_def_layout.setVerticalSpacing(15)
+        self.time_def_layout.setContentsMargins(16, 24, 16, 16)
+        self.time_def_layout.setVerticalSpacing(12)
         self.time_def_layout.setHorizontalSpacing(15)
 
         self.time_editors = {}
@@ -172,12 +228,15 @@ class SettingsWindow(QWidget):
         col = 0
         for keyword in self.default_keywords:
             lbl = QLabel(keyword)
-            lbl.setStyleSheet("color: #BBB; font-weight: bold;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             editor = QTimeEdit()
             editor.setDisplayFormat("HH:mm")
+            editor.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 居中对齐
             self.time_editors[keyword] = editor
+
             self.time_def_layout.addWidget(lbl, row, col)
             self.time_def_layout.addWidget(editor, row, col + 1)
+
             col += 2
             if col >= 4:
                 col = 0
@@ -191,6 +250,7 @@ class SettingsWindow(QWidget):
         save_btn = QPushButton("保存配置")
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.clicked.connect(self.save_config)
+        save_btn.setFixedHeight(36)
         layout.addWidget(save_btn)
 
         scroll_area.setWidget(content_widget)
@@ -223,9 +283,17 @@ class SettingsWindow(QWidget):
             time_str = mapping.get(k, "12:00")
             editor.setTime(QTime.fromString(time_str, "HH:mm"))
 
+        # 加载邮件配置
+        mail_conf = data.get("mail_config", {})
+        self.smtp_server.setText(mail_conf.get("smtp_server", "smtp.163.com"))
+        self.smtp_port.setText(str(mail_conf.get("smtp_port", "465")))
+        self.sender_email.setText(mail_conf.get("sender_email", ""))
+        self.email_pwd.setText(mail_conf.get("password", ""))
+        self.receiver_email.setText(mail_conf.get("receiver_email", ""))
+
     def save_config(self):
         api_key_val = self.api_input.text().strip()
-        api_key_val = "".join(c for c in api_key_val if 33 <= ord(c) <= 126)  # 清洗 Key
+        api_key_val = "".join(c for c in api_key_val if 33 <= ord(c) <= 126)
 
         use_ai = self.ai_check.isChecked()
         m_time = self.morning_edit.time().toString("HH:mm")
@@ -241,13 +309,24 @@ class SettingsWindow(QWidget):
             QMessageBox.warning(self, "提示", "开启 AI 模式需要填写 API Key")
             return
 
+        mail_config = {
+            "smtp_server": self.smtp_server.text().strip(),
+            "smtp_port": self.smtp_port.text().strip(),
+            "sender_email": self.sender_email.text().strip(),
+            "password": self.email_pwd.text().strip(),
+            "receiver_email": self.receiver_email.text().strip()
+        }
+        if not mail_config["receiver_email"]:
+            mail_config["receiver_email"] = mail_config["sender_email"]
+
         config = {
             "api_key": api_key_val,
             "model": "abab6.5s-chat",
             "use_ai": use_ai,
             "morning_time": m_time,
             "evening_time": e_time,
-            "time_mapping": new_mapping
+            "time_mapping": new_mapping,
+            "mail_config": mail_config
         }
 
         try:
@@ -259,13 +338,12 @@ class SettingsWindow(QWidget):
             QMessageBox.critical(self, "错误", f"保存失败: {e}")
 
 
-# --- AI/离线处理线程 ---
+# --- Worker (保持不变) ---
 class Worker(QObject):
     finished = pyqtSignal(str)
     ask_selection = pyqtSignal(list, dict)
 
     def analyze_offline_time(self, text, config):
-        """离线模式下的简易时间分析器"""
         mapping = config.get("time_mapping", {})
         now = datetime.datetime.now()
         target_date = now
@@ -305,7 +383,6 @@ class Worker(QObject):
         config = get_config()
         use_ai = config.get("use_ai", True)
 
-        # === 离线模式 ===
         if not use_ai:
             if text.startswith("备忘录 ") or text.startswith("Memo "):
                 content = text.split(" ", 1)[1]
@@ -319,12 +396,10 @@ class Worker(QObject):
             due_date = self.analyze_offline_time(text, config)
             task_data = {"title": text, "due_date": due_date}
             success = create_reminder(task_data)
-
             time_msg = f"\n⏰ {due_date}" if due_date else ""
             self.finished.emit(f"✅ [离线] 提醒已添加{time_msg}" if success else "❌ 添加失败")
             return
 
-        # === AI 模式 ===
         result = parse_user_input(text)
         if result and result.get("error") == "missing_key":
             self.finished.emit("MISSING_KEY")
@@ -357,7 +432,7 @@ class Worker(QObject):
             self.finished.emit("📝 笔记已记录!" if success else "❌ 记录失败")
 
 
-# --- 定时推送线程 ---
+# --- Scheduler (保持不变) ---
 class SchedulerThread(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -367,7 +442,6 @@ class SchedulerThread(threading.Thread):
         config = get_config()
         m_time = config.get("morning_time", "09:00")
         e_time = config.get("evening_time", "21:00")
-
         print(f"⏰ 定时推送服务已启动 (早: {m_time}, 晚: {e_time})...")
 
         schedule.every().day.at(m_time).do(self.push_morning_briefing)
@@ -378,24 +452,25 @@ class SchedulerThread(threading.Thread):
             time.sleep(1)
 
     def push_morning_briefing(self):
-        print("Checking tasks for notification...")
+        print("Checking tasks for morning report...")
         message = get_todays_tasks()
-        if "失败" not in message:
-            send_system_notification("LazyMemo 早报", message)
+        config = get_config()
+        if "失败" not in message and "没有任务" not in message:
+            send_email_notification("🌞 LazyMemo 早报", message, config.get("mail_config", {}))
 
     def push_daily_summary(self):
         message = get_todays_tasks()
+        config = get_config()
         if "失败" not in message:
-            send_system_notification("LazyMemo 晚间提醒", message)
+            send_email_notification("🌙 LazyMemo 晚间提醒", message, config.get("mail_config", {}))
 
 
-# --- 主界面 ---
+# --- App (保持不变) ---
 class LazyMemoApp(QWidget):
     show_signal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
-        # 设置窗口属性：无边框、置顶、工具窗口模式
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -421,54 +496,57 @@ class LazyMemoApp(QWidget):
 
         self.settings_window = None
         self.show_signal.connect(self.show_window)
-
-        # 初始化菜单栏托盘图标
         self.init_tray_icon()
-
-        # 启动键盘监听
         self.start_keyboard_listener()
 
         QTimer.singleShot(500, self.check_first_run)
-
         self.scheduler = SchedulerThread()
         self.scheduler.start()
 
     def init_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-
-        # 尝试查找 tray_icon.png
-        # 优先去 BUNDLE_DIR (打包后的资源目录) 查找
         icon_path = os.path.join(BUNDLE_DIR, "tray_icon.png")
-
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
         else:
-            print(f"Warning: Icon not found at {icon_path}")
-            # 如果找不到图片，这里其实应该给个默认行为，或者不显示图标
-            # 但 QSystemTrayIcon 如果没有 Icon 是不会显示的
             pass
 
-        # 创建右键菜单
         tray_menu = QMenu()
+        test_action = QAction("📧 测试发送邮件", self)
+        test_action.triggered.connect(self.send_test_notification)
+        tray_menu.addAction(test_action)
+        tray_menu.addSeparator()
 
-        # 显示/隐藏 动作
         show_action = QAction("显示/隐藏 LazyMemo", self)
         show_action.triggered.connect(self.toggle_visibility)
         tray_menu.addAction(show_action)
 
+        settings_action = QAction("设置", self)
+        settings_action.triggered.connect(self.open_settings)
+        tray_menu.addAction(settings_action)
         tray_menu.addSeparator()
 
-        # 退出 动作
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(QApplication.instance().quit)
         tray_menu.addAction(quit_action)
 
         self.tray_icon.setContextMenu(tray_menu)
-
-        # 单击托盘图标也可以切换显示
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
-
         self.tray_icon.show()
+
+    def send_test_notification(self):
+        print("尝试发送测试邮件...")
+        config = get_config()
+        mail_conf = config.get("mail_config", {})
+        if not mail_conf or not mail_conf.get("sender_email"):
+            QMessageBox.warning(self, "缺少配置", "请先在设置中填写邮件发送信息！")
+            return
+        threading.Thread(target=lambda: send_email_notification(
+            "LazyMemo 邮件测试",
+            "恭喜！邮件配置正确。<br><br>这是一条测试消息。",
+            mail_conf
+        )).start()
+        QMessageBox.information(self, "发送中", "测试邮件正在后台发送，请检查收件箱。")
 
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -492,23 +570,19 @@ class LazyMemoApp(QWidget):
         if config.get("use_ai", True) and not config.get("api_key"):
             self.open_settings()
 
-    # === 双击 Option 监听逻辑 ===
     def start_keyboard_listener(self):
         self.last_alt_time = 0
 
         def on_press(key):
-            # 如果按下了除 Option 以外的任何键，重置计时器
             if key not in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
                 self.last_alt_time = 0
 
         def on_release(key):
-            # 只有在松开 Option 键的瞬间进行判断
             if key in [keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r]:
                 current_time = time.time()
-                # 如果距离上次松开 Option 小于 0.4 秒，视为双击
                 if current_time - self.last_alt_time < 0.4:
-                    self.show_signal.emit()  # 唤醒
-                    self.last_alt_time = 0  # 重置，防止三连击
+                    self.show_signal.emit()
+                    self.last_alt_time = 0
                 else:
                     self.last_alt_time = current_time
 
@@ -526,7 +600,6 @@ class LazyMemoApp(QWidget):
         text = self.input_field.text().strip()
         lower_text = text.lower()
         if not text: return
-
         if lower_text in ["退出", "exit", "quit"]: QApplication.quit(); return
         if lower_text in ["设置", "设定", "config"]:
             self.open_settings();
@@ -534,7 +607,6 @@ class LazyMemoApp(QWidget):
             return
 
         self.input_field.clear()
-
         config = get_config()
         if config.get("use_ai", True):
             self.input_field.setPlaceholderText("Thinking... 🤖")
@@ -571,7 +643,6 @@ class LazyMemoApp(QWidget):
     def open_settings(self):
         if not self.settings_window: self.settings_window = SettingsWindow()
         self.settings_window.show()
-        # 居中显示设置窗口
         s = QApplication.primaryScreen().geometry()
         self.settings_window.move((s.width() - self.settings_window.width()) // 2,
                                   (s.height() - self.settings_window.height()) // 2)
@@ -581,10 +652,7 @@ class LazyMemoApp(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # 关键设置：关闭最后一个窗口（输入框）时，不要退出程序
-    # 因为我们还有系统托盘在运行
     app.setQuitOnLastWindowClosed(False)
-
     window = LazyMemoApp()
     print("LazyMemo Running...")
     sys.exit(app.exec())

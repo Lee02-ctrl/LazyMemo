@@ -2,7 +2,10 @@ import subprocess
 import datetime
 import json
 import shutil # 用来检查是否安装了 terminal-notifier
-
+import subprocess
+import smtplib  # 新增
+from email.mime.text import MIMEText # 新增
+from email.header import Header # 新增
 
 # === 辅助函数：构建日期脚本 ===
 def _build_date_script(due_date_str):
@@ -273,25 +276,48 @@ def get_todays_tasks():
 
 
 # === 6. 发送通知 (优雅版：使用 terminal-notifier) ===
-def send_system_notification(title, message):
-    print(f"📣 推送通知: {title}")
+def send_email_notification(title, message, mail_config):
+    """
+    发送邮件通知
+    mail_config 结构: {
+        "smtp_server": "smtp.qq.com",
+        "smtp_port": 465,
+        "sender_email": "xxx@qq.com",
+        "password": "xxx", (授权码)
+        "receiver_email": "xxx@qq.com"
+    }
+    """
+    if not mail_config or not mail_config.get("sender_email"):
+        print("❌ 邮件配置为空，跳过发送")
+        return False
 
-    # 检查是否安装了 terminal-notifier
-    if shutil.which("terminal-notifier"):
-        # 使用第三方工具发送（支持点击、图标、不被屏蔽）
-        subprocess.run([
-            'terminal-notifier',
-            '-title', title,
-            '-message', message,
-            '-sound', 'default',
-            '-appIcon', 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png'  # 给它个图标（可选）
-        ])
-    else:
-        # 【降级方案】如果没有安装 brew，回退到 Finder 发送
-        safe_message = message.replace('"', '\\"')
-        script = f'''
-        tell application "Finder"
-            display notification "{safe_message}" with title "{title}" subtitle "LazyMemo" sound name "Glass"
-        end tell
-        '''
-        subprocess.run(['osascript', '-e', script])
+    print(f"📧 正在发送邮件: {title}...")
+
+    sender = mail_config.get("sender_email")
+    password = mail_config.get("password")
+    receiver = mail_config.get("receiver_email", sender) # 默认发给自己
+    smtp_server = mail_config.get("smtp_server", "smtp.qq.com")
+    smtp_port = int(mail_config.get("smtp_port", 465))
+
+    # 构建邮件内容 (简单 HTML 格式，让换行更清晰)
+    html_msg = message.replace("\n", "<br>")
+    message_obj = MIMEText(html_msg, 'html', 'utf-8')
+    message_obj['From'] = Header(f"LazyMemo <{sender}>", 'utf-8')
+    message_obj['To'] = Header(receiver, 'utf-8')
+    message_obj['Subject'] = Header(title, 'utf-8')
+
+    try:
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls() # 如果是非 SSL 端口，尝试 TLS
+
+        server.login(sender, password)
+        server.sendmail(sender, [receiver], message_obj.as_string())
+        server.quit()
+        print("✅ 邮件发送成功！")
+        return True
+    except Exception as e:
+        print(f"❌ 邮件发送失败: {e}")
+        return False

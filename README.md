@@ -29,11 +29,11 @@
 ### ⏰ 语义时间自定义
 - **你的时间你做主**：系统不懂你的作息？在 LazyMemo 里，你可以定义 *"早上"* 是 09:00 还是 11:00，*"夜里"* 是 22:00 还是 02:00。让 AI 适应你的生物钟。
 
-### 📰 贴心的早晚报
-- **每日简报**：每天早晚定时（可配置）推送今日待办概览。哪怕无事发生，也会贴心地报个平安。
+### 📧 贴心的邮件早晚报
+- **每日简报**：告别容易被忽略的弹窗通知。每天早晚定时（可配置）通过 **邮件** 推送今日待办概览。支持 163、QQ、Gmail 等主流邮箱，无论身在何处，重要事项不错过。
 
 ### 🎨 极简主义 UI
-- **沉浸式设计**：无边框黑色半透明悬浮窗，搭配 macOS 原生质感的设置面板。呼之即来，挥之即去。
+- **沉浸式设计**：无边框黑色半透明悬浮窗，搭配经过精心打磨的 macOS 原生质感设置面板。呼之即来，挥之即去。
 
 ---
 
@@ -47,7 +47,7 @@
 克隆项目到本地：
 ```bash
 git clone [https://github.com/Lee02-Ctrl/LazyMemo.git](https://github.com/Lee02-Ctrl/LazyMemo.git)
-cd LazyMemo
+cd LazyMemo```
 ```
 推荐使用虚拟环境安装依赖：
 
@@ -74,27 +74,40 @@ LazyMemo 支持通过 GUI 设置面板修改配置，配置会自动保存到 co
 本项目底层使用 OpenAI SDK，理论上支持所有兼容 OpenAI 接口的大模型。
 
 默认针对 **MiniMax (abab6.5s-chat)** 进行了优化，拥有极高的性价比和中文理解能力。你需要去 [MiniMax 开放平台](https://platform.minimaxi.com/) 申请一个 API Key。
+### 📧 邮件通知设置
+为了接收早晚报，你需要在设置面板中配置 SMTP 服务（推荐使用 163 或 QQ 邮箱）：
 
+SMTP 服务器: 例如 smtp.163.com
+
+端口: 通常为 465 (SSL)
+
+授权码: 注意，此处必须填写邮箱服务商提供的授权码（开启 SMTP 服务时生成），而非你的登录密码。
 ### **📄 配置文件示例 (config.json)**
 
 首次运行后会自动生成此文件。你也可以手动创建：
 
-{  
-    "api\_key": "sk-your-api-key-here",  
-    "model": "abab6.5s-chat",  
-    "use\_ai": true,  
-    "morning\_time": "09:00",  
-    "evening\_time": "21:00",  
-    "time\_mapping": {  
-        "早上": "09:00",  
-        "上午": "09:00",  
-        "中午": "12:00",  
-        "下午": "15:00",  
-        "晚上": "18:00",  
-        "傍晚": "18:00",  
-        "夜里": "22:00",  
-        "凌晨": "00:00"  
-    }  
+{
+    "api_key": "sk-your-api-key-here",
+    "model": "abab6.5s-chat",
+    "use_ai": true,
+    "morning_time": "09:00",
+    "evening_time": "21:00",
+    "time_mapping": {
+        "早上": "09:00",
+        "上午": "09:00",
+        "中午": "12:00",
+        "下午": "15:00",
+        "晚上": "18:00",
+        "夜里": "22:00",
+        "凌晨": "00:00"
+    },
+    "mail_config": {
+        "smtp_server": "smtp.163.com",
+        "smtp_port": "465",
+        "sender_email": "your_email@163.com",
+        "password": "your_auth_code",
+        "receiver_email": "your_email@163.com"
+    }
 }
 
 **⚠️ 安全提示**：config.json 包含敏感 Key，**请勿上传到 GitHub**。项目自带的 .gitignore 已默认忽略该文件。
